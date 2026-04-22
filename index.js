@@ -1,35 +1,41 @@
 const express = require('express');
 const crypto = require('crypto');
+const cors = require('cors');
 
 const app = express();
-app.use(express.json());
 
 // =========================
-// 🗄️ DATABASE (IN-MEMORY)
+// 🔓 MIDDLEWARE FIX
+// =========================
+app.use(cors()); // allows Postman + frontend access
+app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // optional safety
+
+// =========================
+// 🗄️ DATABASE
 // =========================
 let visitors = [];
 
-/* =========================
-   🏠 ROOT ROUTE (FIX ERROR)
-========================= */
+// =========================
+// 🏠 ROOT (TEST SERVER)
+// =========================
 app.get('/', (req, res) => {
-  res.send('🏫 School Visitor Log & Access Monitoring System API is running');
+  res.send('🏫 Visitor API is running');
 });
 
-/* =========================
-   ❤️ HEALTH CHECK
-========================= */
+// =========================
+// ❤️ HEALTH CHECK
+// =========================
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'Server is running properly',
-  });
+  res.json({ status: 'OK' });
 });
 
-/* =========================
-   🧾 CREATE VISITOR REQUEST
-========================= */
+// =========================
+// 🧾 CREATE VISITOR (POSTMAN TEST)
+// =========================
 app.post('/visitors', (req, res) => {
+  console.log("BODY:", req.body); // 👈 helps debug Postman
+
   const { name, purpose } = req.body;
 
   if (!name || !purpose) {
@@ -50,14 +56,35 @@ app.post('/visitors', (req, res) => {
   };
 
   visitors.push(visitor);
+
+  res.status(201).json(visitor);
+});
+
+// =========================
+// 📋 GET ALL VISITORS
+// =========================
+app.get('/visitors', (req, res) => {
+  res.json(visitors);
+});
+
+// =========================
+// 🔍 GET SINGLE VISITOR
+// =========================
+app.get('/visitors/:id', (req, res) => {
+  const visitor = visitors.find(v => v.id === req.params.id);
+
+  if (!visitor) {
+    return res.status(404).json({ message: 'Visitor not found' });
+  }
+
   res.json(visitor);
 });
 
-/* =========================
-   🛠️ APPROVE + GENERATE QR
-========================= */
+// =========================
+// 🛠️ APPROVE VISITOR
+// =========================
 app.put('/visitors/:id/approve', (req, res) => {
-  const visitor = visitors.find((v) => v.id === req.params.id);
+  const visitor = visitors.find(v => v.id === req.params.id);
 
   if (!visitor) {
     return res.status(404).json({ message: 'Visitor not found' });
@@ -74,45 +101,36 @@ app.put('/visitors/:id/approve', (req, res) => {
   });
 });
 
-/* =========================
-   📲 QR CHECK-IN (SAFE)
-========================= */
+// =========================
+// 📲 CHECK-IN
+// =========================
 app.post('/visitors/checkin', (req, res) => {
   const { qr } = req.body;
 
-  if (!qr) {
-    return res.status(400).json({ message: 'QR required' });
-  }
+  if (!qr) return res.status(400).json({ message: 'QR required' });
 
-  const parts = qr.split('|');
+  const [idPart, tokenPart] = qr.split('|');
 
-  if (parts.length !== 2) {
-    return res.status(400).json({ message: 'Invalid QR format' });
-  }
+  const id = idPart?.split(':')[1];
+  const token = tokenPart?.split(':')[1];
 
-  const id = parts[0].split(':')[1];
-  const token = parts[1].split(':')[1];
-
-  const visitor = visitors.find((v) => v.id === id);
+  const visitor = visitors.find(v => v.id === id);
 
   if (!visitor || visitor.qrToken !== token) {
-    return res.status(400).json({ message: 'Invalid QR or visitor not found' });
+    return res.status(400).json({ message: 'Invalid QR' });
   }
 
   visitor.status = 'CHECKED-IN';
   visitor.checkInTime = new Date();
 
-  res.json({
-    message: 'Check-in successful',
-    visitor,
-  });
+  res.json({ message: 'Check-in successful', visitor });
 });
 
-/* =========================
-   🚪 CHECK-OUT
-========================= */
+// =========================
+// 🚪 CHECK-OUT
+// =========================
 app.put('/visitors/checkout/:id', (req, res) => {
-  const visitor = visitors.find((v) => v.id === req.params.id);
+  const visitor = visitors.find(v => v.id === req.params.id);
 
   if (!visitor) {
     return res.status(404).json({ message: 'Visitor not found' });
@@ -121,57 +139,12 @@ app.put('/visitors/checkout/:id', (req, res) => {
   visitor.status = 'EXITED';
   visitor.checkOutTime = new Date();
 
-  res.json({
-    message: 'Check-out successful',
-    visitor,
-  });
+  res.json({ message: 'Check-out successful', visitor });
 });
 
-/* =========================
-   📋 GET ALL VISITORS
-========================= */
-app.get('/visitors', (req, res) => {
-  res.json(visitors);
-});
-
-/* =========================
-   🔍 GET SINGLE VISITOR
-========================= */
-app.get('/visitors/:id', (req, res) => {
-  const visitor = visitors.find((v) => v.id === req.params.id);
-
-  if (!visitor) {
-    return res.status(404).json({ message: 'Visitor not found' });
-  }
-
-  res.json(visitor);
-});
-
-/* =========================
-   📊 DAILY REPORT
-========================= */
-app.get('/reports/daily', (req, res) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const todayVisitors = visitors.filter((v) => {
-    const created = new Date(v.createdAt);
-    created.setHours(0, 0, 0, 0);
-    return created.getTime() === today.getTime();
-  });
-
-  res.json({
-    total: todayVisitors.length,
-    pending: todayVisitors.filter((v) => v.status === 'PENDING').length,
-    approved: todayVisitors.filter((v) => v.status === 'APPROVED').length,
-    checkedIn: todayVisitors.filter((v) => v.status === 'CHECKED-IN').length,
-    exited: todayVisitors.filter((v) => v.status === 'EXITED').length,
-  });
-});
-
-/* =========================
-   🌐 SERVER START
-========================= */
+// =========================
+// 🌐 START SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
